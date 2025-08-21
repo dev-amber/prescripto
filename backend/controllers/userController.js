@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken"
 import {v2 as cloudinary} from "cloudinary"
 import doctorModel from "../models/doctorModel.js";
 import appointmentModel from "../models/appointmentModel.js";
+import Razorpay from "razorpay";
 
 
 // API to register user
@@ -57,6 +58,8 @@ const  loginUser=async(req,res)=>{
         
         const {email,password}=req.body;
 
+        
+
         const user=await userModel.findOne({email})
         if(!user){
             return res.json({success:false, message:"User not exist"})
@@ -65,7 +68,17 @@ const  loginUser=async(req,res)=>{
         const isMatch=await bycrypt.compare(password,user.password)
         if(isMatch){
             const token=jwt.sign({id:user._id},process.env.JWT_SECRET)
-            res.json({success:true, token})
+          res.json({
+  success: true,
+  message: "Login successful",
+  token,
+  user: {
+    _id: user._id,
+    name: user.name,
+    email: user.email
+  }
+});
+
         }else{
             res.json({success:false, message:"Invalid credentials"})
         }
@@ -130,64 +143,170 @@ const updateProfile = async (req, res) => {
 };
 
 // api for booked appointment
-const bookAppointment=async(req,res)=>{
+const bookAppointment = async (req, res) => {
     try {
-        
-        const {docId,slotDate,slotTime}=req.body;
-        const userId=req.body.userId
-
-        const docData=await doctorModel.findById(docId).select('-password')
-
-        if(!docData.available){
-             res.json({success:false, message:"Doctor not Available"});
+        // ✅ Check if request body exists and required fields are provided
+        const { docId, slotDate, slotTime, userId } = req.body || {};
+        if (!docId || !slotDate || !slotTime || !userId) {
+            return res.status(400).json({ success: false, message: "Missing required fields" });
         }
-      
-        // docData available
-        let slots_booked=docData.slots_booked // all slots in this var
 
-        // check date and time of slots available
-        if(slots_booked(slotDate)){
-            if(slots_booked[slotDate].includes(slotTime)){
-                res.json({success:false, message:"Slot not Available"});
-            }else{
-                // in this case slot time is not available
-                slots_booked[slotDate].push(slotTime)
+        // ✅ Fetch doctor data
+        const docData = await doctorModel.findById(docId).select("-password");
+        if (!docData) {
+            return res.status(404).json({ success: false, message: "Doctor not found" });
+        }
+
+        // ✅ Check if doctor is available
+        if (!docData.available) {
+            return res.status(400).json({ success: false, message: "Doctor not available" });
+        }
+
+        // ✅ Get slots already booked
+        let slots_booked = docData.slots_booked || {};
+
+        // ✅ Check if the requested date already has bookings
+        if (slots_booked[slotDate]) {
+            // If the requested time is already booked
+            if (slots_booked[slotDate].includes(slotTime)) {
+                return res.status(400).json({ success: false, message: "Slot not available" });
+            } else {
+                // Add new slot time for the given date
+                slots_booked[slotDate].push(slotTime);
             }
-        }else{
-             // in case not part date is booked for appointment
-              slots_booked[slotDate]=[]
-              slots_booked[slotDate].push(slotTime)
+        } else {
+            // No bookings for this date → create array and add the time
+            slots_booked[slotDate] = [slotTime];
         }
 
-        const userData=await userModel.findById(userId).select('-password')
+        // ✅ Fetch user data
+        const userData = await userModel.findById(userId).select("-password");
+        if (!userData) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
 
-        delete docData.slots_booked  // we dont want history of slots booked so this
+        // ✅ Remove booked slots from doctor data before saving appointment
+        const doctorCopy = docData.toObject();
+        delete doctorCopy.slots_booked;
 
-        const appointmentData={
+        // ✅ Prepare appointment data
+        const appointmentData = {
             userId,
             docId,
             userData,
-            docData,
+            docData: doctorCopy,
             amount: docData.fees,
             slotDate,
             slotTime,
-            date: Date.now()// current timsstramp
+            date: Date.now()
+        };
 
-        }
+        // ✅ Save appointment
+        const newAppointment = new appointmentModel(appointmentData);
+        await newAppointment.save();
 
-        const newappointment=new appointmentModel(appointmentData)
-        await newappointment.save()
+        // ✅ Update doctor's booked slots
+        await doctorModel.findByIdAndUpdate(docId, { slots_booked });
 
-        // save new slots data in doctor data
-        await doctorModel.findByIdAndUpdate(docId,{slots_booked}) // after all this update the data
-
-        res.json({success:true, message: "Appointment Booked"})
+        // ✅ Send success response
+        return res.json({ success: true, message: "Appointment booked successfully" });
 
     } catch (error) {
-        console.log(error);
-    return res.json({ success: false, message: error.message });
+        console.error("Error booking appointment:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// api for list of appointment to myappointment
+const  listAppointment=async(req,res)=>{
+
+    try {
+        
+        const userId=req.userId;
+        const appointments= await appointmentModel.find({userId}) // bcz we find doc data of part user
+
+        res.json({success: true, appointments})
+    } catch (error) {
+        console.error("Error booking appointment:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    
     }
 }
+
+// api to cancel appointment
+const cancelAppointment = async (req, res) => {
+    try {
+        const { appointmentId, userId } = req.body;
+
+        const appointmentData = await appointmentModel.findById(appointmentId);
+        if (!appointmentData) {
+            return res.status(404).json({ success: false, message: "Appointment not found" });
+        }
+
+        // Verify appointment belongs to user
+        if (appointmentData.userId.toString() !== userId) {
+            return res.status(403).json({ success: false, message: "Unauthorized action" });
+        }
+
+        // Mark appointment as cancelled
+        await appointmentModel.findByIdAndUpdate(appointmentId, { cancelled: true });
+
+        // Release doctor slot
+        const { docId, slotDate, slotTime } = appointmentData;
+        await doctorModel.findByIdAndUpdate(docId, {
+            $pull: { [`slots_booked.${slotDate}`]: slotTime }
+        });
+
+        res.json({ success: true, message: "Appointment Cancelled" });
+
+    } catch (error) {
+        console.error("Error cancelling appointment:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+const razorpayInstance = new Razorpay({
+  key_id: process.env.RAZOR_PAY_KEY_ID,
+  key_secret: process.env.RAZOR_PAY_SECRET_KEY,
+});
+
+// API to make payment using Razorpay
+const paymentRazorpay = async (req, res) => {
+  try {
+    const { appointmentId } = req.body;
+    const appointmentData = await appointmentModel.findById(appointmentId);
+
+    if (!appointmentData) {
+      return res.json({ success: false, message: "Appointment not found" });
+    }
+
+    // creating options for razor payment
+    const options = {
+      amount: appointmentData.amount * 100, // amount in paise
+      currency: process.env.CURRENCY || "INR",
+      receipt: `receipt_${appointmentId}`,
+    };
+
+    // creation of an order
+    const order = await razorpayInstance.orders.create(options);
+
+    return res.json({
+      success: true,
+      order,
+      appointment: {
+        id: appointmentData._id,
+        doctor: appointmentData.doctorName,
+        patient: appointmentData.patientName,
+        amount: appointmentData.amount,
+      },
+    });
+  } catch (error) {
+    console.log(error);
+    return res.json({ success: false, message: error.message });
+  }
+};
 
 
 
@@ -195,6 +314,9 @@ export {registerUser,
     loginUser,
     getProfile,
     updateProfile,
-    bookAppointment
+    bookAppointment,
+    listAppointment,
+    cancelAppointment,
+    paymentRazorpay
 
 }
