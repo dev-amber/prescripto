@@ -47,6 +47,7 @@ const AddDoctor = () => {
       formData.forEach((value, key) => {
         console.log(`${key} : ${value}`);
       });
+      console.log(req.file);
 
       // ✅ send token in Authorization header
       const { data } = await axios.post(
