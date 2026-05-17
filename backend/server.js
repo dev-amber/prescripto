@@ -20,7 +20,9 @@ connectCloudinary()
 // middlewares
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }));
-app.use(cors())  // allow fronted to connect backend
+app.use(cors({
+  origin: "*"
+})) // allow fronted to connect backend
 
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
