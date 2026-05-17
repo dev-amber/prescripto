@@ -1,15 +1,7 @@
-import streamifier from "streamifier";
-import { v2 as cloudinary } from "cloudinary";
+import multer from "multer";
 
-const streamUpload = (buffer) => {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      (error, result) => {
-        if (result) resolve(result);
-        else reject(error);
-      }
-    );
+const upload = multer({
+  storage: multer.memoryStorage()
+});
 
-    streamifier.createReadStream(buffer).pipe(stream);
-  });
-};
+export default upload;
