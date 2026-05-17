@@ -1,16 +1,15 @@
-import multer from "multer";
-import path from "path";
+import streamifier from "streamifier";
+import { v2 as cloudinary } from "cloudinary";
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/"); // folder must exist!
-  },
-  filename: function (req, file, cb) {
-    const uniqueName = Date.now() + "-" + file.originalname;
-    cb(null, uniqueName);
-  },
-});
+const streamUpload = (buffer) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      (error, result) => {
+        if (result) resolve(result);
+        else reject(error);
+      }
+    );
 
-const upload = multer({ storage });
-
-export default upload;
+    streamifier.createReadStream(buffer).pipe(stream);
+  });
+};
